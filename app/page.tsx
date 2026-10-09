@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { classifyDraftStatus, normalizeEspnPicks, unavailableNames, undoManualPick, type DraftStatus, type SourcedPick } from './lib/draft-state'
+import { draftKitPlayers } from './lib/draft-kit-data'
 import { buildPuntMatrix, matrixStrategies, restoreStrategy } from './lib/punt-matrix'
 import { profileForPlayer, recommendPlayers, type Strategy } from './lib/recommendations'
 
-type Player = { rank: number; name: string; positions?: string; note?: string; risk?: boolean; adp?: number }
+type Player = { rank: number; name: string; positions?: string; note?: string; risk?: boolean; adp?: number; marketAdp?: number | null; espnAdp?: number | null; personalRank?: number; tags?: string[]; helps?: string[]; hurts?: string[]; gp?: number | null; dd?: number | null; td?: number | null; takes?: { type: string; text: string; src: string }[]; news?: { type: string; text: string; src: string }[] }
 
 const players: Player[] = [
   { rank: 1, name: 'Nikola Jokic', positions: 'C', note: 'Anchor / DD-TD upside' },
@@ -318,6 +319,8 @@ export default function Home() {
   const [espnStatus, setEspnStatus] = useState<'unavailable' | 'stale' | 'ready' | 'syncing'>('unavailable')
   const [espnComplete, setEspnComplete] = useState<boolean | null>(null)
   const [draftStatus, setDraftStatus] = useState<DraftStatus>('unknown')
+  const [personalRankOverrides, setPersonalRankOverrides] = useState<Record<string, number>>({})
+  const [selectedPlayerName, setSelectedPlayerName] = useState<string | null>(null)
 
   useEffect(() => {
     const legacyManual = load('nba-manual-drafted').length ? load('nba-manual-drafted') : load('nba-drafted')
@@ -330,6 +333,7 @@ export default function Home() {
     setEspnComplete(savedCompleteness === null ? null : savedCompleteness === 'true')
     if (savedSync) setEspnStatus('stale')
     setStrategy(restoreStrategy(localStorage.getItem('nba-strategy')))
+    try { setPersonalRankOverrides(JSON.parse(localStorage.getItem('nba-personal-ranks') || '{}')) } catch { setPersonalRankOverrides({}) }
   }, [])
   useEffect(() => {
     fetch('/api/espn?view=status', { cache: 'no-store' }).then(r => r.json()).then(data => {
@@ -345,8 +349,16 @@ export default function Home() {
     localStorage.setItem('nba-my-picks', JSON.stringify(myPicks))
   }, [manualDrafted, espnPicks, lastSyncAt, espnComplete, myPicks])
   useEffect(() => { localStorage.setItem('nba-strategy', strategy) }, [strategy])
+  useEffect(() => { localStorage.setItem('nba-personal-ranks', JSON.stringify(personalRankOverrides)) }, [personalRankOverrides])
 
-  const board = useMemo(() => [...players.filter(p => p.rank <= 40), ...fullBoardRows], [])
+  const board = useMemo(() => draftKitPlayers.map(player => {
+    const personalRank = personalRankOverrides[player.name] ?? player.rank
+    const helps = [...player.helps]
+    const hurts = [...player.hurts]
+    const note = helps.length ? helps.join(' / ') : 'Qualitative profile pending'
+    const injuryRisk = player.tags.some(tag => /risk|injury|fade/i.test(tag)) || player.news.some(item => item.type === 'injury')
+    return { rank: personalRank, personalRank, name: player.name, positions: (player.pos || '').replaceAll(',', ', '), note, risk: injuryRisk, adp: player.marketAdp ?? undefined, marketAdp: player.marketAdp, espnAdp: player.espnAdp, tags: [...player.tags], helps, hurts, gp: player.gp, dd: player.dd, td: player.td, takes: [...player.takes], news: [...player.news] }
+  }).sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name)), [personalRankOverrides])
   const unavailable = useMemo(() => unavailableNames(manualDrafted, espnPicks), [manualDrafted, espnPicks])
   const available = useMemo(() => board.filter(p => !unavailable.has(p.name) && p.name.toLowerCase().includes(search.toLowerCase())), [board, unavailable, search])
   const nextPick = nextPickForSnake(Number(pick), Number(draftPosition))
@@ -358,6 +370,26 @@ export default function Home() {
   const recommendations = recommendPlayers({ available, roster: { names: myPicks, needs: rosterNeeds, categoryNeeds }, strategy }).map(result => ({ ...result.player, reasons: result.reasons }))
   const puntMatrix = useMemo(() => buildPuntMatrix(available, myPicks), [available, myPicks])
   const matrixWarning = espnStatus !== 'ready' || espnComplete !== true
+  const selectedPlayer = selectedPlayerName ? board.find(player => player.name === selectedPlayerName) || null : null
+  const selectedEvaluation = selectedPlayer ? (() => {
+    const profile = profileForPlayer(selectedPlayer)
+    const fit = categoryNeeds.filter(category => profile[category as keyof typeof profile])
+    const mainTake = selectedPlayer.takes?.[0]?.text || 'No additional qualitative take is available.'
+    return {
+      strengths: selectedPlayer.helps?.join(', ') || 'No supported category strengths',
+      weaknesses: selectedPlayer.hurts?.join(', ') || 'No supported category weaknesses',
+      fit: fit.length ? `Helps current needs: ${fit.join(', ')}` : 'Does not clearly repair a current category need from available notes.',
+      tradeoff: selectedPlayer.hurts?.length ? `Trade-off: ${selectedPlayer.hurts.join(', ')} may need to be managed.` : 'No supported major trade-off is recorded.',
+      timing: selectedPlayer.rank <= Number(pick) + 12 ? 'Inside the current personal-rank window; consider now if the tier is thinning.' : 'Outside the immediate personal-rank window; waiting is reasonable unless the next-pick risk is high.',
+      take: mainTake,
+      rates: selectedPlayer.dd != null || selectedPlayer.td != null ? `Modeled DD/TD rates in supplied kit: DD ${selectedPlayer.dd != null ? `${Math.round(selectedPlayer.dd * 100)}%` : '—'} · TD ${selectedPlayer.td != null ? `${Math.round(selectedPlayer.td * 100)}%` : '—'}.` : 'DD/TD rates unavailable.',
+    }
+  })() : null
+  const setPersonalRank = (player: Player, value: string) => {
+    const rank = Number(value)
+    if (!Number.isInteger(rank) || rank < 1 || rank > 156) return
+    setPersonalRankOverrides(previous => ({ ...previous, [player.name]: rank }))
+  }
 
   const addPick = (player: Player, mine: boolean) => {
     if (unavailable.has(player.name)) { setStatus(`${player.name} is already unavailable`); return }
@@ -405,10 +437,11 @@ export default function Home() {
     <section className="hero"><div><p className="eyebrow">LIVE DRAFT WORKSPACE</p><h2>Make the next pick with a clear board.</h2><p className="muted">Real ADP board loaded from your draft-board PDF. ESPN sync is server-side and optional; manual entry remains available when credentials or league state are unavailable.</p></div><div className="controls"><label>League ID <input value={leagueId} onChange={e=>setLeagueId(e.target.value)} placeholder="e.g. 123456789" inputMode="numeric" /></label><label>Draft slot <select value={draftPosition} onChange={e => setDraftPosition(e.target.value)}>{Array.from({length:12},(_,i)=><option key={i}>{i+1}</option>)}</select></label><label>Round <input value={round} onChange={e=>setRound(e.target.value)} type="number" min="1" max="13" /></label><label>Pick <input value={pick} onChange={e=>setPick(e.target.value)} type="number" min="1" max="156" /></label><button onClick={syncEspn} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync ESPN'}</button></div></section>
     <details className="private"><summary>Private ESPN sync credentials</summary><p>Optional local-only inputs. They are held in memory and sent only to this local server during sync; they are not saved to the browser.</p><label>ESPN S2 <input type="password" value={espnS2} onChange={e=>setEspnS2(e.target.value)} autoComplete="off" /></label><label>ESPN SWID <input type="password" value={espnSwid} onChange={e=>setEspnSwid(e.target.value)} autoComplete="off" /></label></details>
     <div className="stats"><div><span>YOUR PICKS</span><strong>{myPicks.length} / 13</strong></div><div><span>MANUAL / ESPN PICKS</span><strong>{manualDrafted.length} / {espnPicks.length}</strong><small>ESPN data {espnComplete === true ? 'complete' : espnComplete === false ? 'incomplete' : 'unknown'}</small></div><div><span>DRAFT STATUS</span><strong>{draftStatus === 'not-started' ? 'Not started' : draftStatus === 'in-progress' ? 'In progress' : draftStatus === 'finished' ? 'Finished' : 'Unknown'}</strong><small>Current pick unavailable</small></div><div><span>DATA FRESHNESS</span><strong className="amber">{espnStatus === 'ready' ? 'ESPN live' : espnStatus === 'stale' ? 'ESPN stale' : 'Manual only'}</strong></div></div>
-    <div className="layout"><section className="panel board"><div className="panelhead"><div><p className="eyebrow">PLAYER BOARD</p><h3>Available now</h3></div><input className="search" placeholder="Search player" value={search} onChange={e=>setSearch(e.target.value)} /></div><div className="boardhead"><span>RANK</span><span>PLAYER</span><span>PROFILE</span><span>ACTION</span></div>{available.map(p=><div className="player" key={`${p.rank}-${p.name}`}><b>{String(p.rank).padStart(2,'0')}</b><div><strong>{p.name}</strong><small>{p.positions || 'ESPN eligibility pending'} · ADP {p.adp ?? p.rank}{p.risk ? ' · risk flag' : ''}</small></div><span className="profile">{p.note || 'ADP row · projections pending'}</span><div className="actions"><button onClick={()=>addPick(p,true)}>My pick</button><button className="ghost" onClick={()=>addPick(p,false)}>Log drafted</button></div></div>)}{available.length===0 && <div className="empty">No available player matches this search.</div>}</section>
+    <div className="layout"><section className="panel board"><div className="panelhead"><div><p className="eyebrow">PLAYER BOARD</p><h3>Available now</h3></div><input className="search" placeholder="Search player" value={search} onChange={e=>setSearch(e.target.value)} /></div><div className="boardhead"><span>PR / ADP</span><span>PLAYER</span><span>PROFILE</span><span>ACTION</span></div>{available.map(p=><div className={`player ${selectedPlayerName === p.name ? 'active' : ''}`} key={`${p.rank}-${p.name}`} onClick={()=>setSelectedPlayerName(p.name)}><b>{String(p.rank).padStart(2,'0')}<small>{p.espnAdp ? `E${p.espnAdp}` : p.marketAdp ?? '—'}</small></b><div><strong>{p.name}</strong><small>{p.positions || 'ESPN eligibility pending'}{p.tags?.length ? ` · ${p.tags.join(', ')}` : ''}</small></div><span className="profile">{p.note || 'Qualitative profile pending'}{p.hurts?.length ? ` · hurts ${p.hurts.join(', ')}` : ''}</span><div className="actions"><button onClick={()=>addPick(p,true)}>My pick</button><button className="ghost" onClick={()=>addPick(p,false)}>Log drafted</button></div></div>)}{available.length===0 && <div className="empty">No available player matches this search.</div>}</section>
       <aside className="side"><section className="panel"><div className="panelhead"><div><p className="eyebrow">RECOMMENDATIONS</p><h3>For pick {pick}</h3></div></div><div className="strategy">{matrixStrategies.map(s=><button key={s} className={strategy===s?'selected':''} onClick={()=>setStrategy(s)}>{s}</button>)}</div>{recommendations.map((p,i)=><div className="recommend" key={`${p.rank}-${p.name}`}><div className="rank">{i+1}</div><div><strong>{p.name}</strong><small>ADP {p.adp ?? p.rank} · {p.positions || 'ESPN eligibility pending'}</small><p>{p.note || 'ADP row · projections pending'}. {p.reasons?.join('; ') || 'Uses rank and roster context.'}</p></div></div>)}</section>
+      {selectedPlayer && selectedEvaluation && <section className="panel evaluation"><div className="panelhead"><div><p className="eyebrow">PLAYER EVALUATION</p><h3>{selectedPlayer.name}</h3></div><button className="ghost" onClick={()=>setSelectedPlayerName(null)}>Close</button></div><p><b>Strengths:</b> {selectedEvaluation.strengths}</p><p><b>Weaknesses:</b> {selectedEvaluation.weaknesses}</p><p><b>Roster fit:</b> {selectedEvaluation.fit}</p><p><b>Biggest trade-off:</b> {selectedEvaluation.tradeoff}</p><p><b>Timing:</b> {selectedEvaluation.timing}</p><p className="footnote">{selectedEvaluation.take}</p><p className="footnote">{selectedEvaluation.rates}</p><label className="personalRank">Personal rank <input type="number" min="1" max="156" value={selectedPlayer.personalRank || selectedPlayer.rank} onChange={event=>setPersonalRank(selectedPlayer, event.target.value)} /></label><small>Market ADP remains separate: {selectedPlayer.espnAdp ? `ESPN ${selectedPlayer.espnAdp}` : selectedPlayer.marketAdp ?? 'unavailable'} · qualitative/model data only</small></section>}
       <section className="panel matrix"><div className="panelhead"><div><p className="eyebrow">LIVE PUNT DECISION MATRIX</p><h3>Strategy check</h3></div></div>{matrixWarning && <p className="matrixWarning">Warning: draft state is {espnStatus === 'stale' ? 'stale' : 'unavailable or incomplete'}; this matrix uses the last valid state plus manual picks.</p>}<p className="matrixMethod">Heuristic — not projection-backed.</p>{puntMatrix.map(row=><div className={`matrixRow ${row.strategy === strategy ? 'selected' : ''}`} key={row.strategy}><div className="matrixTitle"><strong>{row.strategy}</strong><span>{row.rating}</span></div><p>{row.reasoning}</p><small>Sacrifices: {row.sacrifices} · Prioritizes: {row.priorities}</small><small>Next target: {row.target}</small></div>)}</section>
       <section className="panel"><p className="eyebrow">YOUR ROSTER</p><h3>Slots & category lens</h3><div className="slots">{slots.map((slot,i)=><div key={i}><span>{slot}</span><b>{myPicks[i] || 'Open'}</b></div>)}</div><div className="categorygrid">{cats.map(c=><span key={c}>{c}<b>—</b></span>)}</div><p className="footnote">Category totals are intentionally blank until projections or player stats are connected. Percentages must be volume-weighted; TO is negative.</p></section></aside></div>
-    <footer><span>Source: your 2026-27 draft-board PDF · ADP is a timing reference, not a projection.</span><button onClick={undo}>Undo manual log</button><button className="danger" onClick={()=>{setManualDrafted([]);setMyPicks([]);setStatus('Manual board cleared')}}>Clear manual board</button></footer>
+    <footer><span>Source: supplied 11-Cat Draft Kit + existing board · market ADP, personal rank, and qualitative notes remain separate.</span><button onClick={undo}>Undo manual log</button><button className="danger" onClick={()=>{setManualDrafted([]);setMyPicks([]);setStatus('Manual board cleared')}}>Clear manual board</button></footer>
   </main>
 }
