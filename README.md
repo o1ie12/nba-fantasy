@@ -24,7 +24,7 @@ Then open http://localhost:3000.
 
 ## Configuration
 
-Copy `.env.example` to `.env.local` to enable league sync. `ESPN_LEAGUE_ID` is required for draft/settings reads; `ESPN_S2` and `ESPN_SWID` are only needed if ESPN rejects private-league reads. Never expose ESPN cookies or Supabase service-role credentials to browser code. Public player reads work without credentials, but ESPN currently returns only a 50-player page from that endpoint.
+Copy `.env.example` to `.env.local` to enable league sync. Put your ESPN `SWID` and `espn_s2` cookie values in `ESPN_SWID` and `ESPN_S2`; keep the braces around SWID if ESPN gives it to you that way. `ESPN_LEAGUE_ID` can be entered in the UI or configured here. The values are read only by the Next.js server and are never stored in browser storage or sent in the browser URL. Never expose ESPN cookies or Supabase service-role credentials to browser code. Public player reads work without credentials, but ESPN currently returns only a 50-player page from that endpoint.
 
 The UI's **Sync ESPN** button calls the server route, never ESPN directly from the browser. A failed or unconfigured sync leaves the manual board intact and visible.
 

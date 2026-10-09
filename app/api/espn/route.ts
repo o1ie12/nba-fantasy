@@ -18,7 +18,16 @@ async function readEspn(path: string) {
 
 export async function GET(request: NextRequest) {
   const view = request.nextUrl.searchParams.get('view') || 'draft'
-  const leagueId = process.env.ESPN_LEAGUE_ID
+  const leagueId = request.nextUrl.searchParams.get('leagueId') || process.env.ESPN_LEAGUE_ID
+
+  if (view === 'status') {
+    return NextResponse.json({
+      source: 'server configuration',
+      leagueConfigured: Boolean(leagueId),
+      privateCookiesConfigured: Boolean(process.env.ESPN_S2 && process.env.ESPN_SWID),
+      message: leagueId ? 'Ready to sync ESPN draft data' : 'Enter a league ID or configure ESPN_LEAGUE_ID',
+    })
+  }
   const fetchedAt = new Date().toISOString()
 
   try {
