@@ -70,6 +70,7 @@ export default function Home() {
   const [round, setRound] = useState('1')
   const [pick, setPick] = useState('1')
   const [status, setStatus] = useState('Manual mode - ready')
+  const [syncing, setSyncing] = useState(false)
 
   useEffect(() => { setDrafted(load('nba-drafted')); setMyPicks(load('nba-my-picks')) }, [])
   useEffect(() => { localStorage.setItem('nba-drafted', JSON.stringify(drafted)); localStorage.setItem('nba-my-picks', JSON.stringify(myPicks)) }, [drafted, myPicks])
@@ -87,10 +88,21 @@ export default function Home() {
     setStatus(`${player.name} logged${mine ? ' to your roster' : ''}`)
   }
   const undo = () => { const last = drafted[drafted.length - 1]; if (!last) return; setDrafted(drafted.slice(0, -1)); setMyPicks(myPicks.filter(x => x !== last)); setStatus(`Undid ${last}`) }
+  const syncEspn = async () => {
+    setSyncing(true)
+    try {
+      const response = await fetch('/api/espn?view=draft', { cache: 'no-store' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'ESPN sync failed')
+      setStatus(`ESPN synced · ${data.picks?.filter((p: { drafted: boolean }) => p.drafted).length || 0} drafted picks`)
+    } catch (error) {
+      setStatus(`${error instanceof Error ? error.message : 'ESPN sync failed'} · manual mode`)
+    } finally { setSyncing(false) }
+  }
 
   return <main>
     <header className="topbar"><div><span className="eyebrow">OCT 11 / 2026-27</span><h1>Draft Companion</h1></div><div className="connection"><span className="dot" /> {status}<small>ESPN sync not configured</small></div></header>
-    <section className="hero"><div><p className="eyebrow">LIVE DRAFT WORKSPACE</p><h2>Make the next pick with a clear board.</h2><p className="muted">Real ADP board loaded from your draft-board PDF. Projections and ESPN state stay visibly unavailable until connected.</p></div><div className="controls"><label>Draft slot <select value={draftPosition} onChange={e => setDraftPosition(e.target.value)}>{Array.from({length:12},(_,i)=><option key={i}>{i+1}</option>)}</select></label><label>Round <input value={round} onChange={e=>setRound(e.target.value)} type="number" min="1" max="13" /></label><label>Pick <input value={pick} onChange={e=>setPick(e.target.value)} type="number" min="1" max="156" /></label></div></section>
+    <section className="hero"><div><p className="eyebrow">LIVE DRAFT WORKSPACE</p><h2>Make the next pick with a clear board.</h2><p className="muted">Real ADP board loaded from your draft-board PDF. ESPN sync is server-side and optional; manual entry remains available when credentials or league state are unavailable.</p></div><div className="controls"><label>Draft slot <select value={draftPosition} onChange={e => setDraftPosition(e.target.value)}>{Array.from({length:12},(_,i)=><option key={i}>{i+1}</option>)}</select></label><label>Round <input value={round} onChange={e=>setRound(e.target.value)} type="number" min="1" max="13" /></label><label>Pick <input value={pick} onChange={e=>setPick(e.target.value)} type="number" min="1" max="156" /></label><button onClick={syncEspn} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync ESPN'}</button></div></section>
     <div className="stats"><div><span>YOUR PICKS</span><strong>{myPicks.length} / 13</strong></div><div><span>PLAYERS LOGGED</span><strong>{drafted.length}</strong></div><div><span>NEXT PICK / SNAKE</span><strong>{nextPick || '—'}</strong></div><div><span>DATA FRESHNESS</span><strong className="amber">Manual</strong></div></div>
     <div className="layout"><section className="panel board"><div className="panelhead"><div><p className="eyebrow">PLAYER BOARD</p><h3>Available now</h3></div><input className="search" placeholder="Search player" value={search} onChange={e=>setSearch(e.target.value)} /></div><div className="boardhead"><span>ADP</span><span>PLAYER</span><span>PROFILE</span><span>ACTION</span></div>{available.map(p=><div className="player" key={p.name}><b>{String(p.rank).padStart(2,'0')}</b><div><strong>{p.name}</strong><small>{p.positions}{p.risk ? ' · risk flag' : ''}</small></div><span className="profile">{p.note}</span><div className="actions"><button onClick={()=>addPick(p,true)}>My pick</button><button className="ghost" onClick={()=>addPick(p,false)}>Log drafted</button></div></div>)}{available.length===0 && <div className="empty">No available player matches this search.</div>}</section>
       <aside className="side"><section className="panel"><div className="panelhead"><div><p className="eyebrow">RECOMMENDATIONS</p><h3>For pick {pick}</h3></div></div><div className="strategy">{(['Balanced','DD/TD-heavy','Opportunistic punt'] as Strategy[]).map(s=><button key={s} className={strategy===s?'selected':''} onClick={()=>setStrategy(s)}>{s}</button>)}</div>{recommendations.map((p,i)=><div className="recommend" key={p.name}><div className="rank">{i+1}</div><div><strong>{p.name}</strong><small>ADP {p.rank} · {p.positions}</small><p>{p.note}. {strategy === 'Balanced' ? 'Protects multi-category balance.' : strategy === 'DD/TD-heavy' ? 'Adds repeatable frontcourt counting-stat upside.' : 'Useful if the roster is intentionally conceding a weaker category.'}</p></div></div>)}</section>

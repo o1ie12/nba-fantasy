@@ -9,6 +9,7 @@ Minimal Oct 11, 2026 live-draft workspace for a 12-team ESPN fantasy basketball 
 - Local browser persistence via `localStorage`, including undo and clear.
 - Recommendation modes: Balanced, DD/TD-heavy, and Opportunistic punt.
 - Roster slots, pick timing, connection/freshness state, and explicit missing-data labels.
+- Server-side `/api/espn` boundary for public player reads plus optional league draft/settings reads.
 
 The app does not invent projections, live ESPN state, injuries, or category totals. The category panel remains blank until a tested source is connected. Percentage categories must be volume-weighted and turnovers are treated as negative, per the draft board.
 
@@ -23,7 +24,9 @@ Then open http://localhost:3000.
 
 ## Configuration
 
-Copy `.env.example` to `.env.local` only if a server-side ESPN integration is added. Never expose ESPN cookies or Supabase service-role credentials to browser code. The current Oct 11 fallback does not require credentials or Supabase.
+Copy `.env.example` to `.env.local` to enable league sync. `ESPN_LEAGUE_ID` is required for draft/settings reads; `ESPN_S2` and `ESPN_SWID` are only needed if ESPN rejects private-league reads. Never expose ESPN cookies or Supabase service-role credentials to browser code. Public player reads work without credentials, but ESPN currently returns only a 50-player page from that endpoint.
+
+The UI's **Sync ESPN** button calls the server route, never ESPN directly from the browser. A failed or unconfigured sync leaves the manual board intact and visible.
 
 ## Verification
 
