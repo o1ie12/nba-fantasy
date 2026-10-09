@@ -73,11 +73,13 @@ export default function Home() {
   const [round, setRound] = useState('1')
   const [pick, setPick] = useState('1')
   const [status, setStatus] = useState('Checking ESPN configuration…')
+  const [syncReady, setSyncReady] = useState(false)
   const [syncing, setSyncing] = useState(false)
 
   useEffect(() => { setDrafted(load('nba-drafted')); setMyPicks(load('nba-my-picks')) }, [])
   useEffect(() => {
     fetch('/api/espn?view=status', { cache: 'no-store' }).then(r => r.json()).then(data => {
+      setSyncReady(Boolean(data.leagueConfigured && data.privateCookiesConfigured))
       setStatus(data.privateCookiesConfigured ? 'ESPN private sync ready' : data.leagueConfigured ? 'ESPN public sync ready' : 'Manual mode - add league ID')
     }).catch(() => setStatus('Manual mode - ESPN unavailable'))
   }, [])
@@ -111,7 +113,7 @@ export default function Home() {
   }
 
   return <main>
-    <header className="topbar"><div><span className="eyebrow">OCT 11 / 2026-27</span><h1>Draft Companion</h1></div><div className="connection"><span className="dot" /> {status}<small>ESPN sync not configured</small></div></header>
+    <header className="topbar"><div><span className="eyebrow">OCT 11 / 2026-27</span><h1>Draft Companion</h1></div><div className="connection"><span className="dot" /> {status}<small>{syncReady ? 'ESPN sync ready' : 'Manual fallback available'}</small></div></header>
     <section className="hero"><div><p className="eyebrow">LIVE DRAFT WORKSPACE</p><h2>Make the next pick with a clear board.</h2><p className="muted">Real ADP board loaded from your draft-board PDF. ESPN sync is server-side and optional; manual entry remains available when credentials or league state are unavailable.</p></div><div className="controls"><label>League ID <input value={leagueId} onChange={e=>setLeagueId(e.target.value)} placeholder="e.g. 123456789" inputMode="numeric" /></label><label>Draft slot <select value={draftPosition} onChange={e => setDraftPosition(e.target.value)}>{Array.from({length:12},(_,i)=><option key={i}>{i+1}</option>)}</select></label><label>Round <input value={round} onChange={e=>setRound(e.target.value)} type="number" min="1" max="13" /></label><label>Pick <input value={pick} onChange={e=>setPick(e.target.value)} type="number" min="1" max="156" /></label><button onClick={syncEspn} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync ESPN'}</button></div></section>
     <details className="private"><summary>Private ESPN sync credentials</summary><p>Optional local-only inputs. They are held in memory and sent only to this local server during sync; they are not saved to the browser.</p><label>ESPN S2 <input type="password" value={espnS2} onChange={e=>setEspnS2(e.target.value)} autoComplete="off" /></label><label>ESPN SWID <input type="password" value={espnSwid} onChange={e=>setEspnSwid(e.target.value)} autoComplete="off" /></label></details>
     <div className="stats"><div><span>YOUR PICKS</span><strong>{myPicks.length} / 13</strong></div><div><span>PLAYERS LOGGED</span><strong>{drafted.length}</strong></div><div><span>NEXT PICK / SNAKE</span><strong>{nextPick || '—'}</strong></div><div><span>DATA FRESHNESS</span><strong className="amber">Manual</strong></div></div>
