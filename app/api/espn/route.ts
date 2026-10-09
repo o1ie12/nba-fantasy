@@ -16,6 +16,11 @@ async function readEspn(path: string, credentials?: { s2?: string; swid?: string
   return response.json()
 }
 
+async function playerNameMap(credentials?: { s2?: string; swid?: string }) {
+  const data = await readEspn(`/apis/v3/games/fba/seasons/${season}/players?view=players_wl&view=kona_player_info`, credentials)
+  return new Map((Array.isArray(data) ? data : []).map((player: Record<string, unknown>) => [String(player.id), String(player.fullName || '')]))
+}
+
 export async function GET(request: NextRequest) {
   const view = request.nextUrl.searchParams.get('view') || 'draft'
   const leagueId = request.nextUrl.searchParams.get('leagueId') || process.env.ESPN_LEAGUE_ID
@@ -56,13 +61,15 @@ export async function GET(request: NextRequest) {
     }
 
     const data = await readEspn(`${base}?view=mDraftDetail`)
+    const names = await playerNameMap()
     const picks = (data.draftDetail?.picks || []).map((pick: Record<string, unknown>) => ({
       overallPick: pick.overallPickNumber ?? pick.overallPick ?? null,
       teamId: pick.teamId ?? null,
       playerId: pick.playerId ?? null,
+      playerName: names.get(String(pick.playerId)) || null,
       drafted: Boolean(pick.drafted),
     }))
-    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt, leagueId, inProgress: Boolean(data.draftDetail?.inProgress), drafted: Boolean(data.draftDetail?.drafted), picks })
+    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt, leagueId, inProgress: Boolean(data.draftDetail?.inProgress), drafted: Boolean(data.draftDetail?.drafted), picks, playerNames: picks.filter((pick: { drafted: boolean; playerName: string | null }) => pick.drafted && pick.playerName).map((pick: { playerName: string | null }) => pick.playerName) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown ESPN error'
     return NextResponse.json({ error: message, source: 'manual fallback required', fetchedAt }, { status: 502 })
@@ -74,9 +81,12 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as { leagueId?: string; espnS2?: string; espnSwid?: string }
     const leagueId = body.leagueId || process.env.ESPN_LEAGUE_ID
     if (!leagueId) return NextResponse.json({ error: 'League ID is required' }, { status: 400 })
-    const data = await readEspn(`/apis/v3/games/fba/seasons/${season}/segments/0/leagues/${encodeURIComponent(leagueId)}?view=mDraftDetail`, { s2: body.espnS2, swid: body.espnSwid })
+    const credentials = { s2: body.espnS2, swid: body.espnSwid }
+    const data = await readEspn(`/apis/v3/games/fba/seasons/${season}/segments/0/leagues/${encodeURIComponent(leagueId)}?view=mDraftDetail`, credentials)
+    const names = await playerNameMap(credentials)
     const picks = (data.draftDetail?.picks || []).map((pick: Record<string, unknown>) => ({ overallPick: pick.overallPickNumber ?? pick.overallPick ?? null, teamId: pick.teamId ?? null, playerId: pick.playerId ?? null, drafted: Boolean(pick.drafted) }))
-    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt: new Date().toISOString(), leagueId, inProgress: Boolean(data.draftDetail?.inProgress), drafted: Boolean(data.draftDetail?.drafted), picks })
+    const resolvedPicks = picks.map((pick: { playerId: unknown; drafted: boolean }) => ({ ...pick, playerName: names.get(String(pick.playerId)) || null }))
+    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt: new Date().toISOString(), leagueId, inProgress: Boolean(data.draftDetail?.inProgress), drafted: Boolean(data.draftDetail?.drafted), picks: resolvedPicks, playerNames: resolvedPicks.filter((pick: { drafted: boolean; playerName: string | null }) => pick.drafted && pick.playerName).map((pick: { playerName: string | null }) => pick.playerName) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown ESPN error'
     return NextResponse.json({ error: message, source: 'manual fallback required' }, { status: 502 })

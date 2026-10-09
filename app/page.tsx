@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { profileForPlayer, recommendPlayers } from './lib/recommendations'
 
 type Strategy = 'Balanced' | 'DD/TD-heavy' | 'Opportunistic punt'
 type Player = { rank: number; name: string; positions?: string; note?: string; risk?: boolean; adp?: number }
@@ -310,6 +311,8 @@ export default function Home() {
   const [status, setStatus] = useState('Checking ESPN configuration…')
   const [syncReady, setSyncReady] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null)
+  const [syncSource, setSyncSource] = useState('Manual fallback')
 
   useEffect(() => { setDrafted(load('nba-drafted')); setMyPicks(load('nba-my-picks')) }, [])
   useEffect(() => {
@@ -323,10 +326,12 @@ export default function Home() {
   const board = useMemo(() => [...players.filter(p => p.rank <= 40), ...fullBoardRows], [])
   const available = useMemo(() => board.filter(p => !drafted.includes(p.name) && p.name.toLowerCase().includes(search.toLowerCase())), [board, drafted, search])
   const nextPick = nextPickForSnake(Number(pick), Number(draftPosition))
-  const recommendations = [...available].sort((a, b) => {
-    const bonus = strategy === 'DD/TD-heavy' ? (p: Player) => p.note?.includes('DD') ? -2 : 0 : strategy === 'Opportunistic punt' ? (p: Player) => p.note?.includes('3PM') || p.note?.includes('FT%') ? -1 : 0 : () => 0
-    return a.rank + bonus(a) - (b.rank + bonus(b))
-  }).slice(0, 5)
+  const rosterNeeds = slots.filter((slot, i) => !myPicks[i] && ['PG', 'SG', 'SF', 'PF', 'C'].includes(slot))
+  const categoryNeeds = cats.filter(category => !myPicks.some(name => {
+    const player = board.find(item => item.name === name)
+    return player && profileForPlayer(player)[category as keyof ReturnType<typeof profileForPlayer>]
+  })) as import('./lib/recommendations').Category[]
+  const recommendations = recommendPlayers({ available, roster: { names: myPicks, needs: rosterNeeds, categoryNeeds }, strategy }).map(result => ({ ...result.player, reasons: result.reasons }))
 
   const addPick = (player: Player, mine: boolean) => {
     setDrafted(v => v.includes(player.name) ? v : [...v, player.name])
@@ -342,19 +347,29 @@ export default function Home() {
         : await fetch(`/api/espn?view=draft${leagueId ? `&leagueId=${encodeURIComponent(leagueId)}` : ''}`, { cache: 'no-store' })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'ESPN sync failed')
-      setStatus(`ESPN synced · ${data.picks?.filter((p: { drafted: boolean }) => p.drafted).length || 0} drafted picks`)
+      const names = Array.isArray(data.playerNames) ? data.playerNames.filter(Boolean) : []
+      setDrafted(previous => Array.from(new Set([...previous, ...names])))
+      setLastSyncAt(data.fetchedAt || new Date().toISOString())
+      setSyncSource('ESPN')
+      setStatus(`ESPN synced · ${names.length} drafted picks`)
     } catch (error) {
       setStatus(`${error instanceof Error ? error.message : 'ESPN sync failed'} · manual mode`)
     } finally { setSyncing(false) }
   }
 
+  useEffect(() => {
+    if (!syncReady) return
+    const timer = window.setInterval(() => { void syncEspn() }, 30000)
+    return () => window.clearInterval(timer)
+  }, [syncReady, leagueId, espnS2, espnSwid])
+
   return <main>
-    <header className="topbar"><div><span className="eyebrow">OCT 11 / 2026-27</span><h1>Draft Companion</h1></div><div className="connection"><span className="dot" /> {status}<small>{syncReady ? 'ESPN sync ready' : 'Manual fallback available'}</small></div></header>
+    <header className="topbar"><div><span className="eyebrow">OCT 11 / 2026-27</span><h1>Draft Companion</h1><nav><a href="/home">Home</a><a href="/">Draft Assistant</a></nav></div><div className="connection"><span className="dot" /> {status}<small>{syncReady ? `ESPN polling · last ${lastSyncAt ? new Date(lastSyncAt).toLocaleTimeString() : 'not yet'}` : 'Manual fallback available'}</small></div></header>
     <section className="hero"><div><p className="eyebrow">LIVE DRAFT WORKSPACE</p><h2>Make the next pick with a clear board.</h2><p className="muted">Real ADP board loaded from your draft-board PDF. ESPN sync is server-side and optional; manual entry remains available when credentials or league state are unavailable.</p></div><div className="controls"><label>League ID <input value={leagueId} onChange={e=>setLeagueId(e.target.value)} placeholder="e.g. 123456789" inputMode="numeric" /></label><label>Draft slot <select value={draftPosition} onChange={e => setDraftPosition(e.target.value)}>{Array.from({length:12},(_,i)=><option key={i}>{i+1}</option>)}</select></label><label>Round <input value={round} onChange={e=>setRound(e.target.value)} type="number" min="1" max="13" /></label><label>Pick <input value={pick} onChange={e=>setPick(e.target.value)} type="number" min="1" max="156" /></label><button onClick={syncEspn} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync ESPN'}</button></div></section>
     <details className="private"><summary>Private ESPN sync credentials</summary><p>Optional local-only inputs. They are held in memory and sent only to this local server during sync; they are not saved to the browser.</p><label>ESPN S2 <input type="password" value={espnS2} onChange={e=>setEspnS2(e.target.value)} autoComplete="off" /></label><label>ESPN SWID <input type="password" value={espnSwid} onChange={e=>setEspnSwid(e.target.value)} autoComplete="off" /></label></details>
-    <div className="stats"><div><span>YOUR PICKS</span><strong>{myPicks.length} / 13</strong></div><div><span>PLAYERS LOGGED</span><strong>{drafted.length}</strong></div><div><span>NEXT PICK / SNAKE</span><strong>{nextPick || '—'}</strong></div><div><span>DATA FRESHNESS</span><strong className="amber">Manual</strong></div></div>
+    <div className="stats"><div><span>YOUR PICKS</span><strong>{myPicks.length} / 13</strong></div><div><span>PLAYERS LOGGED</span><strong>{drafted.length}</strong></div><div><span>NEXT PICK / SNAKE</span><strong>{nextPick || '—'}</strong></div><div><span>DATA FRESHNESS</span><strong className="amber">{syncSource}</strong></div></div>
     <div className="layout"><section className="panel board"><div className="panelhead"><div><p className="eyebrow">PLAYER BOARD</p><h3>Available now</h3></div><input className="search" placeholder="Search player" value={search} onChange={e=>setSearch(e.target.value)} /></div><div className="boardhead"><span>RANK</span><span>PLAYER</span><span>PROFILE</span><span>ACTION</span></div>{available.map(p=><div className="player" key={p.name}><b>{String(p.rank).padStart(2,'0')}</b><div><strong>{p.name}</strong><small>{p.positions || 'ESPN eligibility pending'} · ADP {p.adp ?? p.rank}{p.risk ? ' · risk flag' : ''}</small></div><span className="profile">{p.note || 'ADP row · projections pending'}</span><div className="actions"><button onClick={()=>addPick(p,true)}>My pick</button><button className="ghost" onClick={()=>addPick(p,false)}>Log drafted</button></div></div>)}{available.length===0 && <div className="empty">No available player matches this search.</div>}</section>
-      <aside className="side"><section className="panel"><div className="panelhead"><div><p className="eyebrow">RECOMMENDATIONS</p><h3>For pick {pick}</h3></div></div><div className="strategy">{(['Balanced','DD/TD-heavy','Opportunistic punt'] as Strategy[]).map(s=><button key={s} className={strategy===s?'selected':''} onClick={()=>setStrategy(s)}>{s}</button>)}</div>{recommendations.map((p,i)=><div className="recommend" key={p.name}><div className="rank">{i+1}</div><div><strong>{p.name}</strong><small>ADP {p.adp ?? p.rank} · {p.positions || 'ESPN eligibility pending'}</small><p>{p.note || 'ADP row · projections pending'}. {strategy === 'Balanced' ? 'Protects multi-category balance.' : strategy === 'DD/TD-heavy' ? 'Adds repeatable frontcourt counting-stat upside.' : 'Useful if the roster is intentionally conceding a weaker category.'}</p></div></div>)}</section>
+      <aside className="side"><section className="panel"><div className="panelhead"><div><p className="eyebrow">RECOMMENDATIONS</p><h3>For pick {pick}</h3></div></div><div className="strategy">{(['Balanced','DD/TD-heavy','Opportunistic punt'] as Strategy[]).map(s=><button key={s} className={strategy===s?'selected':''} onClick={()=>setStrategy(s)}>{s}</button>)}</div>{recommendations.map((p,i)=><div className="recommend" key={`${p.rank}-${p.name}`}><div className="rank">{i+1}</div><div><strong>{p.name}</strong><small>ADP {p.adp ?? p.rank} · {p.positions || 'ESPN eligibility pending'}</small><p>{p.note || 'ADP row · projections pending'}. {p.reasons?.join('; ') || 'Uses rank and roster context.'}</p></div></div>)}</section>
       <section className="panel"><p className="eyebrow">YOUR ROSTER</p><h3>Slots & category lens</h3><div className="slots">{slots.map((slot,i)=><div key={i}><span>{slot}</span><b>{myPicks[i] || 'Open'}</b></div>)}</div><div className="categorygrid">{cats.map(c=><span key={c}>{c}<b>—</b></span>)}</div><p className="footnote">Category totals are intentionally blank until projections or player stats are connected. Percentages must be volume-weighted; TO is negative.</p></section></aside></div>
     <footer><span>Source: your 2026-27 draft-board PDF · ADP is a timing reference, not a projection.</span><button onClick={undo}>Undo last log</button><button className="danger" onClick={()=>{setDrafted([]);setMyPicks([]);setStatus('Board cleared')}}>Clear board</button></footer>
   </main>
