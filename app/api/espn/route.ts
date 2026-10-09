@@ -3,15 +3,15 @@ import { NextRequest, NextResponse } from 'next/server'
 const BASE_URL = process.env.ESPN_BASE_URL || 'https://lm-api-reads.fantasy.espn.com'
 const season = process.env.ESPN_SEASON_ID || '2027'
 
-function espnHeaders() {
+function espnHeaders(credentials?: { s2?: string; swid?: string }) {
   const headers: Record<string, string> = { Accept: 'application/json' }
-  const cookies = [process.env.ESPN_SWID && `SWID=${process.env.ESPN_SWID}`, process.env.ESPN_S2 && `espn_s2=${process.env.ESPN_S2}`].filter(Boolean)
+  const cookies = [credentials?.swid || process.env.ESPN_SWID, credentials?.s2 || process.env.ESPN_S2].filter(Boolean).map((value, index) => `${index === 0 ? 'SWID' : 'espn_s2'}=${value}`)
   if (cookies.length) headers.Cookie = cookies.join('; ')
   return headers
 }
 
-async function readEspn(path: string) {
-  const response = await fetch(`${BASE_URL}${path}`, { headers: espnHeaders(), cache: 'no-store' })
+async function readEspn(path: string, credentials?: { s2?: string; swid?: string }) {
+  const response = await fetch(`${BASE_URL}${path}`, { headers: espnHeaders(credentials), cache: 'no-store' })
   if (!response.ok) throw new Error(`ESPN returned HTTP ${response.status}`)
   return response.json()
 }
@@ -66,5 +66,19 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown ESPN error'
     return NextResponse.json({ error: message, source: 'manual fallback required', fetchedAt }, { status: 502 })
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as { leagueId?: string; espnS2?: string; espnSwid?: string }
+    const leagueId = body.leagueId || process.env.ESPN_LEAGUE_ID
+    if (!leagueId) return NextResponse.json({ error: 'League ID is required' }, { status: 400 })
+    const data = await readEspn(`/apis/v3/games/fba/seasons/${season}/segments/0/leagues/${encodeURIComponent(leagueId)}?view=mDraftDetail`, { s2: body.espnS2, swid: body.espnSwid })
+    const picks = (data.draftDetail?.picks || []).map((pick: Record<string, unknown>) => ({ overallPick: pick.overallPickNumber ?? pick.overallPick ?? null, teamId: pick.teamId ?? null, playerId: pick.playerId ?? null, drafted: Boolean(pick.drafted) }))
+    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt: new Date().toISOString(), leagueId, inProgress: Boolean(data.draftDetail?.inProgress), drafted: Boolean(data.draftDetail?.drafted), picks })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown ESPN error'
+    return NextResponse.json({ error: message, source: 'manual fallback required' }, { status: 502 })
   }
 }
