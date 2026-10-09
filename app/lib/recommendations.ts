@@ -1,4 +1,4 @@
-export type Strategy = 'Balanced' | 'DD/TD-heavy' | 'Opportunistic punt'
+export type Strategy = 'Balanced' | 'Punt FT%' | 'Punt AST' | 'Punt 3PM' | 'Punt PTS' | 'DD/TD-heavy' | 'Opportunistic punt'
 export type Category = 'PTS' | 'REB' | 'AST' | '3PM' | 'STL' | 'BLK' | 'FG%' | 'FT%' | 'TO' | 'DD' | 'TD'
 
 export type RecommendationPlayer = {
@@ -40,14 +40,23 @@ export function recommendPlayers(input: {
     const riskPenalty = player.risk ? 3 : 0
     const strategyFit = strategy === 'DD/TD-heavy'
       ? ((profile.DD || 0) + (profile.TD || 0)) * 8
-      : strategy === 'Opportunistic punt'
-        ? ((profile['3PM'] || 0) + (profile['FT%'] || 0) + (profile.STL || 0)) * 5
-        : Object.keys(profile).length * 2
+      : strategy === 'Punt FT%'
+        ? ((profile.PTS || 0) + (profile.REB || 0) + (profile.BLK || 0) + (profile.DD || 0)) * 4
+        : strategy === 'Punt AST'
+          ? ((profile.PTS || 0) + (profile.REB || 0) + (profile.STL || 0) + (profile.BLK || 0)) * 4
+          : strategy === 'Punt 3PM'
+            ? ((profile.PTS || 0) + (profile.REB || 0) + (profile.AST || 0) + (profile.BLK || 0)) * 4
+            : strategy === 'Punt PTS'
+              ? ((profile.AST || 0) + (profile.REB || 0) + (profile.STL || 0) + (profile.BLK || 0)) * 4
+              : strategy === 'Opportunistic punt'
+                ? ((profile['3PM'] || 0) + (profile['FT%'] || 0) + (profile.STL || 0)) * 5
+                : Object.keys(profile).length * 2
     const score = 100 - player.rank + categoryFit + positionFit + strategyFit - riskPenalty
     const reasons = [
       categoryFit ? `repairs ${roster.categoryNeeds.filter(category => profile[category]).join('/')}` : '',
       positionFit ? `fills ${roster.needs.find(position => player.positions?.includes(position))}` : '',
       strategy === 'DD/TD-heavy' && (profile.DD || profile.TD) ? 'adds DD/TD profile' : '',
+      strategy.startsWith('Punt ') ? `supports ${strategy}` : '',
       strategy === 'Opportunistic punt' && (profile['3PM'] || profile['FT%']) ? 'supports the opportunistic path' : '',
       player.risk ? 'risk flag' : '',
     ].filter(Boolean)
