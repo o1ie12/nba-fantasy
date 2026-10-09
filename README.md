@@ -4,7 +4,7 @@ Minimal Oct 11, 2026 live-draft workspace for a 12-team ESPN fantasy basketball 
 
 ## What works now
 
-- Draft-board search using the supplied 2026-27 PDF's ADP ranks 1-40.
+- Draft-board search using all 156 ranked rows from the supplied 2026-27 board, including ADP values and source availability flags.
 - Manual logging for your picks and other teams' picks.
 - Local browser persistence via `localStorage`, including undo and clear.
 - Recommendation modes: Balanced, DD/TD-heavy, and Opportunistic punt.
