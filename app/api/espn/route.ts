@@ -61,15 +61,18 @@ export async function GET(request: NextRequest) {
     }
 
     const data = await readEspn(`${base}?view=mDraftDetail`)
+    if (!Array.isArray(data.draftDetail?.picks)) throw new Error('ESPN draft response was incomplete: picks were unavailable')
     const names = await playerNameMap()
-    const picks = (data.draftDetail?.picks || []).map((pick: Record<string, unknown>) => ({
+    const picks = data.draftDetail.picks.map((pick: Record<string, unknown>) => ({
       overallPick: pick.overallPickNumber ?? pick.overallPick ?? null,
       teamId: pick.teamId ?? null,
       playerId: pick.playerId ?? null,
       playerName: names.get(String(pick.playerId)) || null,
       drafted: Boolean(pick.drafted),
     }))
-    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt, leagueId, inProgress: Boolean(data.draftDetail?.inProgress), drafted: Boolean(data.draftDetail?.drafted), picks, playerNames: picks.filter((pick: { drafted: boolean; playerName: string | null }) => pick.drafted && pick.playerName).map((pick: { playerName: string | null }) => pick.playerName) })
+    const draftedPicks = picks.filter((pick: { drafted: boolean }) => pick.drafted)
+    const unresolvedDrafted = draftedPicks.filter((pick: { playerId: unknown; playerName: string | null }) => !pick.playerId && !pick.playerName).length
+    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt, leagueId, inProgress: typeof data.draftDetail.inProgress === 'boolean' ? data.draftDetail.inProgress : null, drafted: typeof data.draftDetail.drafted === 'boolean' ? data.draftDetail.drafted : null, currentPick: null, currentPickVerified: false, dataCompleteness: { complete: unresolvedDrafted === 0, totalSlots: picks.length, draftedSlots: draftedPicks.length, unresolvedDrafted }, picks, playerNames: draftedPicks.filter((pick: { playerName: string | null }) => pick.playerName).map((pick: { playerName: string | null }) => pick.playerName) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown ESPN error'
     return NextResponse.json({ error: message, source: 'manual fallback required', fetchedAt }, { status: 502 })
@@ -83,10 +86,13 @@ export async function POST(request: NextRequest) {
     if (!leagueId) return NextResponse.json({ error: 'League ID is required' }, { status: 400 })
     const credentials = { s2: body.espnS2, swid: body.espnSwid }
     const data = await readEspn(`/apis/v3/games/fba/seasons/${season}/segments/0/leagues/${encodeURIComponent(leagueId)}?view=mDraftDetail`, credentials)
+    if (!Array.isArray(data.draftDetail?.picks)) throw new Error('ESPN draft response was incomplete: picks were unavailable')
     const names = await playerNameMap(credentials)
-    const picks = (data.draftDetail?.picks || []).map((pick: Record<string, unknown>) => ({ overallPick: pick.overallPickNumber ?? pick.overallPick ?? null, teamId: pick.teamId ?? null, playerId: pick.playerId ?? null, drafted: Boolean(pick.drafted) }))
+    const picks = data.draftDetail.picks.map((pick: Record<string, unknown>) => ({ overallPick: pick.overallPickNumber ?? pick.overallPick ?? null, teamId: pick.teamId ?? null, playerId: pick.playerId ?? null, drafted: Boolean(pick.drafted) }))
     const resolvedPicks = picks.map((pick: { playerId: unknown; drafted: boolean }) => ({ ...pick, playerName: names.get(String(pick.playerId)) || null }))
-    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt: new Date().toISOString(), leagueId, inProgress: Boolean(data.draftDetail?.inProgress), drafted: Boolean(data.draftDetail?.drafted), picks: resolvedPicks, playerNames: resolvedPicks.filter((pick: { drafted: boolean; playerName: string | null }) => pick.drafted && pick.playerName).map((pick: { playerName: string | null }) => pick.playerName) })
+    const draftedPicks = resolvedPicks.filter((pick: { drafted: boolean }) => pick.drafted)
+    const unresolvedDrafted = draftedPicks.filter((pick: { playerId: unknown; playerName: string | null }) => !pick.playerId && !pick.playerName).length
+    return NextResponse.json({ source: 'ESPN draft detail', fetchedAt: new Date().toISOString(), leagueId, inProgress: typeof data.draftDetail.inProgress === 'boolean' ? data.draftDetail.inProgress : null, drafted: typeof data.draftDetail.drafted === 'boolean' ? data.draftDetail.drafted : null, currentPick: null, currentPickVerified: false, dataCompleteness: { complete: unresolvedDrafted === 0, totalSlots: resolvedPicks.length, draftedSlots: draftedPicks.length, unresolvedDrafted }, picks: resolvedPicks, playerNames: draftedPicks.filter((pick: { playerName: string | null }) => pick.playerName).map((pick: { playerName: string | null }) => pick.playerName) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown ESPN error'
     return NextResponse.json({ error: message, source: 'manual fallback required' }, { status: 502 })
